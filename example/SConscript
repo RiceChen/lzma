@@ -1,0 +1,10 @@
+    
+from building import *
+
+cwd     = GetCurrentDir()
+src     = Glob('*.c') + Glob('*.cpp')
+CPPPATH = [cwd + '/../inc']
+
+group = DefineGroup('Lzma', src, depend = ['LZMA_USING_SAMPLE'], CPPPATH = CPPPATH)
+
+Return('group')
