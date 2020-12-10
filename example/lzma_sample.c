@@ -208,20 +208,6 @@ _exit:
     return ret;
 }
 
-int log_2(UInt32 num)
-{
-    int count = 0;
-    while(num)
-    {
-        num = num >> 1;
-        if(num != 0)
-        {
-            count++;
-        }
-    }
-    return count;
-}
-
 static int lzmainfo(int argc, char *argv[])
 {
     CLzmaProps props;
@@ -277,7 +263,7 @@ static int lzmainfo(int argc, char *argv[])
 
     rt_kprintf("\n%s\n", argv[1]);
     rt_kprintf("Uncompressed size:              %d MB (%d bytes)\n", (UInt32)(dcmprs_size / 1024 / 1024), dcmprs_size);
-    rt_kprintf("Dictionary size:                %d MB (2^%d bytes)\n", (UInt32)(props.dicSize / 1024 / 1024), log_2(props.dicSize));
+    rt_kprintf("Dictionary size:                %d MB (2^%d bytes)\n", (UInt32)(props.dicSize / 1024 / 1024), props.dicSize);
     rt_kprintf("Literal context bits (lc):      %d\n", props.lc);
     rt_kprintf("Literal pos bits (lp):          %d\n", props.lp);
     rt_kprintf("Number of pos bits (pb):        %d\n\n", props.pb);
