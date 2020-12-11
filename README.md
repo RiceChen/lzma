@@ -35,13 +35,31 @@ RT-Thread online packages
 
 ## 运行实例
 
-> 该示例为一个简单的文件压缩和解压的例程，需要依赖文件系统，用到的命令有两个 -c和 -d， -c命令压缩一个文件到另一个文件，-d命令解压一个文件到另一个文件。
+> 该示例为一个简单的文件压缩和解压的例程，需要依赖文件系统，用到的命令有两个lzma 和lzmainfo, 其中lzma有两个选项 -c和 -d， -c命令压缩一个文件到另一个文件，-d命令解压一个文件到另一个文件。 lzmainfo用于显示压缩后文件信息。
 > 使用方式：
 
+``` 
+msh />lzma -c rtthread.bin rtthread.bin.lzma
+[lzma] lzma compress file success!
+msh />
+msh />lzma -d rtthread.bin.lzma rtthread.bin
+[lzma] lzma decompress file success!
+msh />
+msh />lzmainfo rtthread.bin.lzma
+
+rtthread.bin.lzma
+Uncompressed size:              0 MB (155 bytes)
+Dictionary size:                0 MB (65536 bytes)
+Literal context bits (lc):      3
+Literal pos bits (lp):          0
+Number of pos bits (pb):        2
+
+msh />
+```
 
 ## 注意事项
 
-> 说明：列出在使用这个 package 过程中需要注意的事项；列出常见的问题，以及解决办法。
+> 说明：
 
 ## 联系方式 & 感谢
 
