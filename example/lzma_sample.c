@@ -52,7 +52,7 @@ static int lzma_compress(ISeqOutStream *outStream, ISeqInStream *inStream, UInt6
     LzmaEncProps_Init(&props);
 
     props.level = 9;
-    props.dictSize = 1 << 12;
+    props.dictSize = 1 << 16;
     props.writeEndMark = 1;
     res = LzmaEnc_SetProps(enc, &props);
 
@@ -194,23 +194,23 @@ static int lzma(int argc, char *argv[])
 
     if(memcmp("-c", argv[1], strlen(argv[1])) == 0)
     {
-        UInt64 fileSize;
-        File_GetLength(&inStream.file, &fileSize);
-        if(lzma_compress(&outStream.vt, &inStream.vt, fileSize) != SZ_OK)
+        UInt64 in_fileSize;
+        File_GetLength(&inStream.file, &in_fileSize);
+        if(lzma_compress(&outStream.vt, &inStream.vt, in_fileSize) != SZ_OK)
         {
             rt_kprintf("[lzma] lzma compress file error!\n");
             goto _err3;
         }
-
+        rt_kprintf("[lzma] lzma compress file success!\n");
     }
     else if(memcmp("-d", argv[1], strlen(argv[1])) == 0)
     {
-
         if(lzma_decompress(&outStream.vt, &inStream.vt)  != SZ_OK)
         {
             rt_kprintf("[lzma] lzma decompress file error!\n");
             goto _err3;
         }
+        rt_kprintf("[lzma] lzma decompress file success!\n");
     }
     else
     {
