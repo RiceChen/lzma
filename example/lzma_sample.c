@@ -7,6 +7,7 @@
 
 #include "LzmaDec.h"
 #include "LzmaEnc.h"
+#include "7zFile.h"
 
 static void help(void)
 {
@@ -19,174 +20,196 @@ static void help(void)
 
 static void *lzma_alloc(ISzAllocPtr p, size_t size)
 {
-    void *ptr = rt_malloc(size);
-    return ptr;
+    if(size == 0)
+    {
+        return RT_NULL;
+    }
+    return rt_malloc(size);
 }
 
 static void lzma_free(ISzAllocPtr p, void *address)
 {
-    rt_free(address);
+    if(address != RT_NULL)
+    {
+        rt_free(address);
+    }
 }
 
-static int lzma_compress(int fd_in, int fd_out)
+ISzAlloc allocator = {lzma_alloc, lzma_free};
+
+static int lzma_compress(ISeqOutStream *outStream, ISeqInStream *inStream, UInt64 fileSize)
 {
-    ISzAlloc allocator = {lzma_alloc, lzma_free};
+    CLzmaEncHandle enc;
     CLzmaEncProps props;
-    Byte props_buff[LZMA_PROPS_SIZE];
-    SizeT props_size = LZMA_PROPS_SIZE;
-    size_t file_size = 0;
-    Byte *src_stream = RT_NULL;
-    Byte *dest_stream = RT_NULL;
-    SizeT src_size = 0;
-    SizeT dest_size = 0;
-    SRes res = 0;
-    
-    file_size = lseek(fd_in, 0, SEEK_END);
-    lseek(fd_in, 0, SEEK_SET);
+    SRes res;
 
-    src_size = file_size;
-    dest_size = file_size;
-
-    src_stream = rt_malloc(src_size);
-    dest_stream = rt_malloc(dest_size);
-
-    if(read(fd_in, src_stream, file_size) != file_size)
+    enc = LzmaEnc_Create(&allocator);
+    if (enc == 0)
     {
-        goto _exit;
+        return SZ_ERROR_MEM;
     }
 
     LzmaEncProps_Init(&props);
+
     props.level = 9;
-    props.dictSize = 1 << 16;
+    props.dictSize = 1 << 12;
     props.writeEndMark = 1;
+    res = LzmaEnc_SetProps(enc, &props);
 
-    res = LzmaEncode(dest_stream + LZMA_PROPS_SIZE + sizeof(UInt64), &dest_size, 
-                    src_stream, src_size,
-                    &props, props_buff, &props_size, 1,
-                    NULL, &allocator, &allocator);
-    if(res != SZ_OK)
+    if (res == SZ_OK)
     {
-        goto _exit;
+        Byte header[LZMA_PROPS_SIZE + 8];
+        size_t headerSize = LZMA_PROPS_SIZE;
+
+        LzmaEnc_WriteProperties(enc, header, &headerSize);
+
+        for (int i = 0; i < 8; i++)
+        {
+            header[headerSize++] = (Byte)(fileSize >> (8 * i));
+        }
+
+        if (outStream->Write(outStream, header, headerSize) != headerSize)
+        {
+            res = SZ_ERROR_WRITE;
+        }
+        else
+        {
+            res = LzmaEnc_Encode(enc, outStream, inStream, NULL, &allocator, &allocator);
+        }
     }
 
-    rt_memcpy(dest_stream, props_buff, LZMA_PROPS_SIZE);
-
-    for(int i = 0; i < 8; i++)
-    {
-        dest_stream[LZMA_PROPS_SIZE + i] = (Byte)(src_size >> (i * 8));
-    }
-
-    dest_size += LZMA_PROPS_SIZE + sizeof(UInt64);
-    
-    write(fd_out, dest_stream, dest_size);
-
-_exit:
-    if(src_stream != RT_NULL)
-    {
-        rt_free(src_stream);
-    }
-    if(dest_stream != RT_NULL)
-    {
-        rt_free(dest_stream);
-    }
-
+    LzmaEnc_Destroy(enc, &allocator, &allocator);
     return res;
 }
 
-static int lzma_decompress(int fd_in, int fd_out)
+static int lzma_decompress(ISeqOutStream *outStream, ISeqInStream *inStream)
 {
-    ISzAlloc allocator = {lzma_alloc, lzma_free};
-    ELzmaStatus state;
-    size_t file_size = 0;
-    SizeT dcmprs_size = 0;
-    Byte *src_stream = RT_NULL;
-    Byte *dest_stream = RT_NULL;
-    SizeT src_size = 0;
-    SizeT dest_size = 0;
-    SRes res = 0;
+    CLzmaDec state;
+    UInt64 unpack_size;
+    Byte header[LZMA_PROPS_SIZE + 8];
+    size_t headerSize = sizeof(header);
+    Byte inBuf[4096];
+    Byte outBuf[4096];
+    size_t inPos = 0, inSize = 0, outPos = 0;
+    SRes res;
 
-    file_size = lseek(fd_in, 0, SEEK_END);
-    lseek(fd_in, 0, SEEK_SET);
-
-    src_size = file_size;
-    src_stream = rt_malloc(src_size);
-    read(fd_in, src_stream, file_size);
-
+    inStream->Read(inStream, header, &headerSize);
 
     for(int i = 0; i < 8; i++)
-        dcmprs_size += (UInt64)src_stream[LZMA_PROPS_SIZE + i] << (i * 8);
-
-    dest_size = src_size * 4;
-    dest_size = ((dcmprs_size > dest_size) ? dest_size : dcmprs_size);
-
-    dest_stream = rt_malloc(dest_size);   
-
-    res = LzmaDecode(dest_stream, &dest_size,
-                    src_stream + LZMA_PROPS_SIZE + sizeof(UInt64),
-                    &src_size, src_stream, LZMA_PROPS_SIZE,
-                    LZMA_FINISH_END, &state, &allocator);
-    if(res != SZ_OK)
     {
-        goto _exit;
+        unpack_size += (UInt64)(header[LZMA_PROPS_SIZE + i] << (i * 8));
     }
 
-    write(fd_out, dest_stream, dest_size);
-_exit:
-    if(src_stream != RT_NULL)
+    LzmaDec_Construct(&state);
+    LzmaDec_Allocate(&state, header, LZMA_PROPS_SIZE, &allocator);
+    LzmaDec_Init(&state);
+
+    while(1)
     {
-        rt_free(src_stream);
-    }
-    if(dest_stream != RT_NULL)
-    {
-        rt_free(dest_stream);
+        if(inPos == inSize)
+        {
+            inSize = 4096;
+            inPos = 0;
+            inStream->Read(inStream, inBuf, &inSize);
+        }
+        {
+            SizeT inProcessed = inSize - inPos;
+            SizeT outProcessed = 4096 - outPos;
+            ELzmaFinishMode finishMode = LZMA_FINISH_ANY;
+            ELzmaStatus status;
+
+            if (outProcessed > unpack_size)
+            {
+                outProcessed = (SizeT)unpack_size;
+                finishMode = LZMA_FINISH_END;
+            }
+
+            res = LzmaDec_DecodeToBuf(&state, outBuf + outPos, &outProcessed,
+                                      inBuf + inPos, &inProcessed, finishMode, &status);
+            inPos += inProcessed;
+            outPos += outProcessed;
+            unpack_size -= outProcessed;
+
+            if (outStream)
+            {
+                if (outStream->Write(outStream, outBuf, outPos) != outPos)
+                {
+                    return SZ_ERROR_WRITE;
+                }
+            }
+            outPos = 0;
+
+            if (res != SZ_OK)
+            {
+                return res;
+            }
+
+            if (inProcessed == 0 && outProcessed == 0)
+            {
+                if(status != LZMA_STATUS_FINISHED_WITH_MARK)
+                {
+                    return SZ_ERROR_DATA;
+                }
+                return res;
+            }
+        }
     }
 
+    LzmaDec_Free(&state, &allocator);
     return res;
 }
 
 static int lzma(int argc, char *argv[])
 {
-    int fd_in = -1, fd_out = -1;
+    CFileSeqInStream inStream;
+    CFileOutStream outStream;
     int ret = 0;
+
+    FileSeqInStream_CreateVTable(&inStream);
+    File_Construct(&inStream.file);
+
+    FileOutStream_CreateVTable(&outStream);
+    File_Construct(&outStream.file);
 
     if(argc != 4)
     {
         help();
         ret = -1;
-        goto _exit;
+        goto _err1;
     }
 
-    fd_in = open(argv[2], O_RDONLY, 0);
-    if(fd_in < 0)
+    if(InFile_Open(&inStream.file, argv[2]) != 0)
     {
         rt_kprintf("[lzma] open the input file: %s erroe\n", argv[2]);
         ret = -1;
-        goto _exit;
+        goto _err1;
     }
 
-    fd_out = open(argv[3], O_WRONLY | O_CREAT | O_TRUNC, 0);
-    if(fd_out < 0)
+    if(OutFile_Open(&outStream.file, argv[3]) != 0)
     {
         rt_kprintf("[lzma] open the output file: %s erroe\n", argv[3]);
         ret = -1;
-        goto _exit;
+        goto _err2;
     }
 
     if(memcmp("-c", argv[1], strlen(argv[1])) == 0)
     {
-
-        if(lzma_compress(fd_in, fd_out) != 0)
+        UInt64 fileSize;
+        File_GetLength(&inStream.file, &fileSize);
+        if(lzma_compress(&outStream.vt, &inStream.vt, fileSize) != SZ_OK)
         {
             rt_kprintf("[lzma] lzma compress file error!\n");
+            goto _err3;
         }
 
     }
     else if(memcmp("-d", argv[1], strlen(argv[1])) == 0)
     {
 
-        if(lzma_decompress(fd_in, fd_out) != 0)
+        if(lzma_decompress(&outStream.vt, &inStream.vt)  != SZ_OK)
         {
             rt_kprintf("[lzma] lzma decompress file error!\n");
+            goto _err3;
         }
     }
     else
@@ -194,17 +217,13 @@ static int lzma(int argc, char *argv[])
         help();
     }
 
-_exit:
-    if(fd_in >= 0)
-    {
-        close(fd_in);
-    }
+_err3:
+    File_Close(&outStream.file);
 
-    if(fd_out >= 0)
-    {
-        close(fd_out);
-    }
+_err2:
+    File_Close(&inStream.file);
 
+_err1:
     return ret;
 }
 
@@ -263,7 +282,7 @@ static int lzmainfo(int argc, char *argv[])
 
     rt_kprintf("\n%s\n", argv[1]);
     rt_kprintf("Uncompressed size:              %d MB (%d bytes)\n", (UInt32)(dcmprs_size / 1024 / 1024), dcmprs_size);
-    rt_kprintf("Dictionary size:                %d MB (2^%d bytes)\n", (UInt32)(props.dicSize / 1024 / 1024), props.dicSize);
+    rt_kprintf("Dictionary size:                %d MB (%d bytes)\n", (UInt32)(props.dicSize / 1024 / 1024), props.dicSize);
     rt_kprintf("Literal context bits (lc):      %d\n", props.lc);
     rt_kprintf("Literal pos bits (lp):          %d\n", props.lp);
     rt_kprintf("Number of pos bits (pb):        %d\n\n", props.pb);
@@ -273,7 +292,7 @@ _exit:
     {
         close(fd_in);
     }
-    return 0;
+    return ret;
 }
 
 #ifdef RT_USING_FINSH
